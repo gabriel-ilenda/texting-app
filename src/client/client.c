@@ -9,6 +9,55 @@
 #define SERVER_PORT 4400
 #define BUFFER_SIZE 1024
 
+
+void ask_credentials(char *username, char *password) {
+    char buffer[100];
+
+    printf("Enter username: ");
+    fgets(buffer, sizeof(buffer), stdin);
+    buffer[strcspn(buffer, "\n")] = 0;
+    strcpy(username, buffer);
+
+    char *pw = getpass("Enter password: ");
+    strcpy(password, pw);
+}
+
+int send_credentials(int sockfd) {
+    int attempts = 0;
+    while (attempts < 3) {
+        char username[100], password[100];
+        ask_credentials(username, password);
+
+        // Send username
+        send(sockfd, username, strlen(username), 0);
+        send(sockfd, "\n", 1, 0); // separate fields
+
+        // Send password
+        send(sockfd, password, strlen(password), 0);
+        send(sockfd, "\n", 1, 0); // separate fields
+
+        // Wait for response
+        char response[100];
+        int len = read(sockfd, response, sizeof(response)-1);
+        if (len > 0) {
+            response[len] = 0;
+            if (strcmp(response, "SUCCESS\n") == 0) {
+                printf("Logged in successfully!\n");
+                return 1;
+            } else {
+                printf("Login failed.\n");
+                attempts++;
+                if (attempts == 3) {
+                    printf("Too many attempts, closing connection");
+                    return 0;
+                }
+            }
+        }
+    }
+    return 0;
+} 
+
+
 int main() {
     int sock = 0;
     struct sockaddr_in serv_addr;
@@ -35,7 +84,10 @@ int main() {
         return -1;
     }
 
-    printf("Connected to server.\n");
+    if (!send_credentials(sock)) {
+        close(sock);
+        return 0;
+    }
 
     while (1) {
         printf("You: ");

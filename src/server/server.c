@@ -11,24 +11,40 @@
 
 void *handle_client(void *arg) {
     int client_fd = *(int *)arg;
-    free(arg);  // don't forget to free the pointer
-    char buffer[BUFFER_SIZE];
+    free(arg);
 
-    printf("New client connected (fd=%d)\n", client_fd);
-
-    while (1) {
-        memset(buffer, 0, BUFFER_SIZE);
-        int bytes_read = read(client_fd, buffer, BUFFER_SIZE);
-        if (bytes_read <= 0) break;  // client disconnected
-
-        printf("[Client %d] %s", client_fd, buffer);
-
-        // Echo it back
-        send(client_fd, buffer, strlen(buffer), 0);
+    char username[100], password[100];
+    FILE *client_stream = fdopen(client_fd, "r");
+    if (!client_stream) {
+        perror("fdopen failed");
+        close(client_fd);
+        return NULL;
     }
 
-    printf("Client %d disconnected.\n", client_fd);
-    close(client_fd);
+    // Read username
+    if (fgets(username, sizeof(username), client_stream) == NULL) {
+        close(client_fd);
+        return NULL;
+    }
+    username[strcspn(username, "\n")] = 0;
+
+    // Read password
+    if (fgets(password, sizeof(password), client_stream) == NULL) {
+        close(client_fd);
+        return NULL;
+    }
+    password[strcspn(password, "\n")] = 0;
+
+    printf("Login attempt: %s / %s\n", username, password);
+
+    if (db_login(username, password)) {
+        send(client_fd, "SUCCESS\n", 8, 0);
+        return NULL;
+    } else {
+        send(client_fd, "FAIL\n", 5, 0);
+    }
+
+    fclose(client_stream);
     return NULL;
 }
 
@@ -120,31 +136,48 @@ int main() {
             continue;
         }
 
-        int choice = get_choice();
+        // int choice = get_choice();
+        // char user_input[100];
+        // char pass_input[100];
 
-        int attempts = 0;
-        char user_input[100];
-        char pass_input[100];
+        // int attempts = 0;
+        // if (choice == 1) {
+        //     while (attempts < 3) {
+        //         credentials(user_input, pass_input);
+        //         if (db_login(user_input, pass_input)) {
+        //             printf("login successful");
+        //             break;
+        //         } else {
+        //             printf("invalid credentials, try again");
+        //             attempts++;   
+        //         }
 
-        while (attempts < 3) {
-            credentials(user_input, pass_input);
-            if (db_login(user_input, pass_input)) {
-                printf("login successful");
-                break;
-            } else {
-                printf("invalid credentials, try again");
-                attempts++;   
-            }
+        //         if (attempts > 2) {
+        //             printf("too many attempts, closing connection");
+        //             free(client_fd);
+        //         }
+        //     }
+        // } else {
+        //     while (attempts < 3) {
+        //         credentials(user_input, pass_input);
+        //         if (db_signup(user_input, pass_input)) {
+        //             printf("signup successful");
+        //             break;
+        //         } else {
+        //             printf("signup failed, try again");
+        //             attempts++;   
+        //         }
 
-            if (attempts > 2) {
-                printf("too many attempts, closing connection");
-                free(client_fd);
-            }
-        }
+        //         if (attempts > 2) {
+        //             printf("too many attempts, closing connection");
+        //             free(client_fd);
+        //         }
+        //     }
+        // }
 
-        if (!client_fd) {
-            continue;
-        }
+        // if (!client_fd) {
+        //     continue;
+        // }
 
         pthread_t tid;
         pthread_create(&tid, NULL, handle_client, client_fd);

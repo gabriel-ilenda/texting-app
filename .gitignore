@@ -1,6 +1,6 @@
-# Binaries
-server
-client
+# Ignore binaries only in root
+/server
+/client
 
 # Build files
 *.o

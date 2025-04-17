@@ -10,101 +10,134 @@
 #define BUFFER_SIZE 1024
 
 
-void ask_credentials(char *username, char *password) {
-    char buffer[100];
-
-    printf("Enter username: ");
-    fgets(buffer, sizeof(buffer), stdin);
-    buffer[strcspn(buffer, "\n")] = 0;
-    strcpy(username, buffer);
-
-    char *pw = getpass("Enter password: ");
-    strcpy(password, pw);
-}
-
-int send_credentials(int sockfd) {
-    int attempts = 0;
-    while (attempts < 3) {
-        char username[100], password[100];
-        ask_credentials(username, password);
-
-        // Send username
-        send(sockfd, username, strlen(username), 0);
-        send(sockfd, "\n", 1, 0); // separate fields
-
-        // Send password
-        send(sockfd, password, strlen(password), 0);
-        send(sockfd, "\n", 1, 0); // separate fields
-
-        // Wait for response
-        char response[100];
-        int len = read(sockfd, response, sizeof(response)-1);
-        if (len > 0) {
-            response[len] = 0;
-            if (strcmp(response, "SUCCESS\n") == 0) {
-                printf("Logged in successfully!\n");
-                return 1;
-            } else {
-                printf("Login failed.\n");
-                attempts++;
-                if (attempts == 3) {
-                    printf("Too many attempts, closing connection");
-                    return 0;
-                }
-            }
-        }
-    }
-    return 0;
-} 
-
-
 int main() {
     int sock = 0;
     struct sockaddr_in serv_addr;
-    char buffer[BUFFER_SIZE] = {0};
+    char buffer[BUFFER_SIZE];
 
-    // Create TCP socket
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("socket creation error");
-        return -1;
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation error");
+        return 1;
     }
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(SERVER_PORT);
+    inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr);
 
-    // Convert IP string to binary
-    if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
-        perror("invalid address");
-        return -1;
-    }
-
-    // Connect to server
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("connection failed");
-        return -1;
+        perror("Connection failed");
+        return 1;
     }
 
-    if (!send_credentials(sock)) {
-        close(sock);
-        return 0;
-    }
+    printf("Connected to server.\n");
 
-    while (1) {
-        printf("You: ");
-        fgets(buffer, BUFFER_SIZE, stdin);
+    int log_or_sign = 0;
+    do {
+        printf("What would you like to do?\n(Type an integer for your choice)\n1 Login\n2 Signup\nChoice: ");
+        if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) {
+            printf("Input error.\n");
+            continue;
+        }
+    
+        log_or_sign = atoi(buffer); // Convert to integer
+    
+        if (log_or_sign != 1 && log_or_sign != 2) {
+            printf("Invalid input. Please enter 1 for Login or 2 for Signup.\n");
+        }
+    } while (log_or_sign != 1 && log_or_sign != 2);
 
-        // Send message
-        send(sock, buffer, strlen(buffer), 0);
+    buffer[0] = (char)log_or_sign;
+    send(sock, buffer, 1, 0);
 
-        // Receive echo
+
+    // printf("What would you like to do?\nEnter integer:\n1 Login\n2 Signup)");
+    // fgets(buffer, BUFFER_SIZE, stdin);
+    // send(sock, buffer, strlen(buffer), 0);
+    
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (log_or_sign == 1) {
+            printf("Username: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            send(sock, buffer, strlen(buffer), 0);
+
+            printf("Password: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            send(sock, buffer, strlen(buffer), 0);
+        } else {
+            char user[100];
+            printf("Username: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            buffer[strcspn(buffer, "\n")] = 0;
+            strncpy(user, buffer, sizeof(user));
+            user[sizeof(user) - 1] = 0;
+
+            char check_user[100];
+            printf("Confirm Username: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            buffer[strcspn(buffer, "\n")] = 0;
+            strncpy(check_user, buffer, sizeof(check_user));
+            check_user[sizeof(check_user) - 1] = 0;
+
+            if (strcmp(user, check_user) != 0) {
+                printf("Error: usernames don't match!\n");
+                continue;
+            }
+
+            send(sock, buffer, strlen(buffer), 0);
+
+            char pass[100];
+            printf("Password: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            buffer[strcspn(buffer, "\n")] = 0;
+            strncpy(pass, buffer, sizeof(pass));
+            pass[sizeof(pass) - 1] = 0;
+
+            char check_pass[100];
+            printf("Confirm Password: ");
+            fgets(buffer, BUFFER_SIZE, stdin);
+            buffer[strcspn(buffer, "\n")] = 0;
+            strncpy(check_pass, buffer, sizeof(check_pass));
+            check_pass[sizeof(check_pass) - 1] = 0;
+
+            if (strcmp(pass, check_pass) != 0) {
+                printf("Error: passwords don't match!\n");
+                continue;
+            }
+
+            send(sock, buffer, strlen(buffer), 0);
+
+        }
+
         memset(buffer, 0, BUFFER_SIZE);
-        int bytes_read = read(sock, buffer, BUFFER_SIZE);
-        if (bytes_read <= 0) break;
+        int valread = recv(sock, buffer, BUFFER_SIZE, 0);
+        if (valread <= 0) break;
 
-        printf("Echo: %s", buffer);
+        printf("%s", buffer);
+        if (strstr(buffer, "successful")) {
+            
+            // Move this to its own method later
+            while (1) {
+                printf("Message to server: ");
+                if (!fgets(buffer, BUFFER_SIZE, stdin)) break;
+                send(sock, buffer, strlen(buffer), 0);
+        
+                memset(buffer, 0, BUFFER_SIZE);
+                int valread = recv(sock, buffer, BUFFER_SIZE, 0);
+                if (valread <= 0) break;
+        
+                printf("%s", buffer);
+            }
+
+            break;
+        };
+        if (strstr(buffer, "closed")) {
+            break;   
+        }
     }
 
-    printf("Disconnected from server.\n");
+
+
     close(sock);
     return 0;
 }

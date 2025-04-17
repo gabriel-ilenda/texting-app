@@ -39,12 +39,19 @@ int db_signup(const char *username, const char *password) {
         username, hash);
 
     if (mysql_query(conn, query) == 0) {
-        return 1;  // success
+        return 1;  // Signup successful
     } else {
-        fprintf(stderr, "Signup error: %s\n", mysql_error(conn));
-        return 0;  // failure
+        unsigned int err_code = mysql_errno(conn);
+        if (err_code == 1062) {
+            // Duplicate entry (username already exists)
+            fprintf(stderr, "Signup failed: username already exists.\n");
+        } else {
+            fprintf(stderr, "Signup error [%d]: %s\n", err_code, mysql_error(conn));
+        }
+        return 0;  // General failure
     }
 }
+
 
 int db_login(const char *username, const char *password) {
     char hash[65];

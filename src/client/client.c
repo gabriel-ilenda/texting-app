@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
+#include <bits/pthreadtypes.h>
 
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 4400
@@ -15,6 +16,55 @@
 
 int p2p_request_pending = 0;
 char p2p_request_from[USERNAME_LEN];
+
+void *receive_handler(void *arg) {
+    int sock = *((int *)arg);
+    char buffer[BUFFER_SIZE];
+    char p2p_request_from[USERNAME_LEN];
+
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
+        int n = recv(sock, buffer, BUFFER_SIZE, 0);
+        if (n <= 0) {
+            printf("\n[!] Server disconnected.\n");
+            close(sock);
+            exit(0);
+        }
+
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        if (strncmp(buffer, "P2P_REQUEST_FROM:", 17) == 0) {
+            strncpy(p2p_request_from, buffer + 17, USERNAME_LEN - 1);
+            p2p_request_from[USERNAME_LEN - 1] = '\0';
+
+            printf("\n[P2P] %s wants to connect with you. Accept? (yes/no): ", p2p_request_from);
+            fflush(stdout);
+
+            char response[BUFFER_SIZE];
+            if (fgets(response, BUFFER_SIZE, stdin) != NULL) {
+                response[strcspn(response, "\n")] = 0;
+
+                if (strcmp(response, "yes") == 0) {
+                    snprintf(buffer, BUFFER_SIZE, "P2P_ACCEPT:%s\n", p2p_request_from);
+                } else {
+                    snprintf(buffer, BUFFER_SIZE, "P2P_REJECT:%s\n", p2p_request_from);
+                }
+                send(sock, buffer, strlen(buffer), 0);
+            }
+
+        } else if (strncmp(buffer, "P2P_ACCEPTED", 13) == 0 || strncmp(buffer, "P2P_REJECTED", 13) == 0) {
+            printf("\n[P2P] %s\n", buffer);
+        } else {
+            printf("\n[Server] %s\n", buffer);
+        }
+
+        printf("Command: "); // Re-display prompt after server message
+        fflush(stdout);
+    }
+
+    return NULL;
+}
+
 
 int login(int sock) {
     char buffer[BUFFER_SIZE];
@@ -142,77 +192,58 @@ int main() {
     printf("Connected to server.\n");
 
     int log_or_sign = 0;
-    do {
+    int login_check = 0;
+
+    while (!login_check) {
         printf("1 Login\n2 Signup\nChoice: ");
         if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) continue;
         log_or_sign = atoi(buffer);
-    } while (log_or_sign != 1 && log_or_sign != 2);
 
-    buffer[0] = (char)log_or_sign;
-    send(sock, buffer, 1, 0);
-
-    int success = (log_or_sign == 1) ? login(sock) : signup(sock);
-    if (!success) {
-        printf("Authentication failed.\n");
-        close(sock);
-        return 0;
+        if (log_or_sign == 1) {
+            buffer[0] = (char)log_or_sign;
+            send(sock, buffer, 1, 0);
+            if (login(sock)) {
+                login_check = 1;  // success
+            } else {
+                printf("\nExceeded max amount of attempts.\n");
+                close(sock);
+                return 0;
+            }
+        } else if (log_or_sign == 2) {
+            buffer[0] = (char)log_or_sign;
+            send(sock, buffer, 1, 0);
+            if (!signup(sock)) {
+                printf("\nExceeded max amount of attempts.\n");
+                close(sock);
+                return 0;
+            }
+            // Prompt to log in after successful signup
+            printf("\nSignup successful. Please log in now.\n");
+        } else {
+            printf("\nError: Invalid choice (must select 1 or 2)\n");
+        }
     }
 
-    fd_set read_fds;
-    int max_fd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
+
+    pthread_t recv_thread;
+    if (pthread_create(&recv_thread, NULL, receive_handler, &sock) != 0) {
+        perror("Failed to create receiver thread");
+        exit(1);
+    }
 
     while (1) {
-        FD_ZERO(&read_fds);
-        FD_SET(STDIN_FILENO, &read_fds);
-        FD_SET(sock, &read_fds);
-
-        if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) < 0) {
-            perror("select");
-            break;
-        }
-
-        if (FD_ISSET(sock, &read_fds)) {
-            memset(buffer, 0, BUFFER_SIZE);
-            int n = recv(sock, buffer, BUFFER_SIZE, 0);
-            if (n <= 0) {
-                printf("\nServer disconnected.\n");
-                break;
-            }
-
-            buffer[strcspn(buffer, "\n")] = 0;
-
-            if (strncmp(buffer, "P2P_REQUEST_FROM:", 17) == 0) {
-                strncpy(p2p_request_from, buffer + 17, USERNAME_LEN - 1);
-                p2p_request_from[USERNAME_LEN - 1] = '\0';
-
-                printf("\n[P2P] %s wants to connect with you. Accept? (yes/no): ", p2p_request_from);
-                fflush(stdout);
-                if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) break;
-                buffer[strcspn(buffer, "\n")] = 0;
-
-                if (strcmp(buffer, "yes") == 0)
-                    snprintf(buffer, BUFFER_SIZE, "P2P_ACCEPT:%s\n", p2p_request_from);
-                else
-                    snprintf(buffer, BUFFER_SIZE, "P2P_REJECT:%s\n", p2p_request_from);
-
-                send(sock, buffer, strlen(buffer), 0);
-                continue;
-            } else {
-                printf("\n[SERVER] %s\n", buffer);
-            }
-        }
-
-        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
-            printf("Command: ");
-            if (!fgets(buffer, BUFFER_SIZE, stdin)) break;
-            buffer[strcspn(buffer, "\n")] = 0;
-
-            if (strcmp(buffer, "/exit") == 0) break;
-            else if (strcmp(buffer, "/who") == 0) active_list(sock);
-            else if (strcmp(buffer, "/p2p") == 0) send_p2p_request(sock);
-            else send(sock, buffer, strlen(buffer), 0);
-        }
+        printf("Command: ");
+        if (!fgets(buffer, BUFFER_SIZE, stdin)) break;
+    
+        buffer[strcspn(buffer, "\n")] = 0;
+    
+        if (strcmp(buffer, "/exit") == 0) break;
+        else if (strcmp(buffer, "/who") == 0) active_list(sock);
+        else if (strcmp(buffer, "/p2p") == 0) send_p2p_request(sock);
+        else send(sock, buffer, strlen(buffer), 0);
     }
+    
+
 
     close(sock);
     return 0;

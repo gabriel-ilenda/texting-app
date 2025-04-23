@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include "database.h"  // your custom DB logic header
+#include <sys/select.h>
 
 #define PORT 4400
 #define BUFFER_SIZE 1024
@@ -59,6 +60,12 @@ void remove_active_user(const char *username) {
     pthread_mutex_unlock(&active_users_mutex);
 }
 
+void kill_client(char *username, int sock) {
+    close(sock);
+    pthread_exit(NULL);
+    remove_active_user(username);
+}
+
 void client_loop(char username[], int client_fd) {
     char buffer[BUFFER_SIZE];
     while (1) {
@@ -87,7 +94,7 @@ void client_loop(char username[], int client_fd) {
 
             if (sscanf(buffer + 5, "%15s %d", ip, &port) != 2) {
                 send(client_fd, "Error: Invalid P2P format. Usage: /p2p <ip> <port>\n", 51, 0);
-                continue;
+                kill_client(username, client_fd);
             }
 
             pthread_mutex_lock(&active_users_mutex);
@@ -102,33 +109,48 @@ void client_loop(char username[], int client_fd) {
 
             if (found_index == -1) {
                 send(client_fd, "Error: No active user found with that IP and port.\n", 51, 0);
-                continue;
+                kill_client(username, client_fd);
             }
 
             char request_msg[BUFFER_SIZE];
             snprintf(request_msg, sizeof(request_msg), "P2P_REQUEST_FROM:%s\n", username);
             send(active_users[found_index].fd, request_msg, strlen(request_msg), 0);
-            send(client_fd, "Target found.\n", 15, 0);
-        } else if (strncmp(buffer, "P2P_ACCEPT:", 11) == 0 || strncmp(buffer, "P2P_REJECT:", 11) == 0) {
-            char initiator[USERNAME_LEN];
-            strncpy(initiator, buffer + 11, USERNAME_LEN - 1);
-            initiator[USERNAME_LEN - 1] = '\0';
+            send(client_fd, "Target found. Awaiting their response...\n", 41, 0);
 
-            pthread_mutex_lock(&active_users_mutex);
-            int initiator_index = -1;
-            for (int i = 0; i < active_user_count; i++) {
-                if (strcmp(active_users[i].username, initiator) == 0) {
-                    initiator_index = i;
-                    break;
+            // Wait for target client's response
+            fd_set readfds;
+            FD_ZERO(&readfds);
+            FD_SET(active_users[found_index].fd, &readfds);
+
+            struct timeval timeout;
+            timeout.tv_sec = 30;  // wait up to 30 seconds
+            timeout.tv_usec = 0;
+
+            int activity = select(active_users[found_index].fd + 1, &readfds, NULL, NULL, &timeout);
+            if (activity > 0 && FD_ISSET(active_users[found_index].fd, &readfds)) {
+                char response[BUFFER_SIZE];
+                memset(response, 0, sizeof(response));
+                int bytes = recv(active_users[found_index].fd, response, sizeof(response), 0);
+                if (bytes > 0) {
+                    if (strncmp(response, "P2P_ACCEPT:", 11) == 0) {
+                        char confirm[BUFFER_SIZE];
+                        snprintf(confirm, sizeof(confirm), "P2P_ACCEPTED by %s\n", active_users[found_index].username);
+                        send(client_fd, confirm, strlen(confirm), 0);
+                    } else if (strncmp(response, "P2P_REJECT:", 11) == 0) {
+                        char reject[BUFFER_SIZE];
+                        snprintf(reject, sizeof(reject), "P2P_REJECTED by %s\n", active_users[found_index].username);
+                        send(client_fd, reject, strlen(reject), 0);
+                    } else {
+                        send(client_fd, "Unexpected response received from target.\n", 42, 0);
+                    }
+                } else {
+                    send(client_fd, "Error reading target's response.\n", 34, 0);
                 }
+            } else {
+                send(client_fd, "No response from target. Timeout or error.\n", 44, 0);
             }
-            pthread_mutex_unlock(&active_users_mutex);
 
-            if (initiator_index != -1) {
-                char reply[BUFFER_SIZE];
-                snprintf(reply, sizeof(reply), buffer[4] == 'A' ? "P2P_ACCEPTED by %s\n" : "P2P_REJECTED by %s\n", username);
-                send(active_users[initiator_index].fd, reply, strlen(reply), 0);
-            }
+        
         } else {
             char *err = "server unknown command\n";
             send(client_fd, err, strlen(err), 0);
@@ -161,11 +183,13 @@ void *handle_client(void *arg) {
         pthread_exit(NULL);
     }
 
-    while (attempts < 3) {
+    char username[USERNAME_LEN];
+    int authenticated = 0;
+
+    while (!authenticated && attempts < 3) {
         memset(buffer, 0, BUFFER_SIZE);
         if (recv(client_fd, buffer, BUFFER_SIZE, 0) <= 0) break;
         buffer[strcspn(buffer, "\n")] = 0;
-        char username[USERNAME_LEN];
         strncpy(username, buffer, USERNAME_LEN - 1);
         username[USERNAME_LEN - 1] = '\0';
 
@@ -176,19 +200,39 @@ void *handle_client(void *arg) {
         strncpy(password, buffer, sizeof(password) - 1);
         password[sizeof(password) - 1] = '\0';
 
-        if ((log_or_sign == 1 && db_login(username, password)) ||
-            (log_or_sign == 2 && db_signup(username, password))) {
-            add_active_user(username, ip_str, port, client_fd);
-            send(client_fd, (log_or_sign == 1) ? "Login successful\n" : "Signup successful\n", 18, 0);
-            client_loop(username, client_fd);
+        if (log_or_sign == 1) {
+            if (db_login(username, password)) {
+                authenticated = 1;
+                add_active_user(username, ip_str, port, client_fd);
+                send(client_fd, "Login successful\n", 17, 0);
+                client_loop(username, client_fd);
+            } else {
+                attempts++;
+                if (attempts < 3)
+                    send(client_fd, "Login failed. Try again.\n", 26, 0);
+                else
+                    send(client_fd, "Login failed 3 times. Connection closed.\n", 42, 0);
+            }
+        } else if (log_or_sign == 2) {
+            if (db_signup(username, password)) {
+                send(client_fd, "Signup successful. Please login now.\n", 38, 0);
+                // Reset login mode
+                attempts = 0;
+                if (recv(client_fd, &log_or_sign, 1, 0) <= 0) break; // Expect login (1)
+            } else {
+                attempts++;
+                if (attempts < 3)
+                    send(client_fd, "Signup failed. Try again.\n", 27, 0);
+                else
+                    send(client_fd, "Signup failed 3 times. Connection closed.\n", 43, 0);
+            }
+        } else {
+            send(client_fd, "Invalid mode. Connection closed.\n", 33, 0);
             close(client_fd);
             pthread_exit(NULL);
-        } else {
-            attempts++;
-            if (attempts < 3) send(client_fd, "Try again.\n", 12, 0);
-            else send(client_fd, "Failed 3 times. Connection closed.\n", 36, 0);
         }
     }
+
 
     close(client_fd);
     pthread_exit(NULL);

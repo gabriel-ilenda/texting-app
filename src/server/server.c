@@ -20,13 +20,14 @@ typedef struct {
     char ip[INET_ADDRSTRLEN];
     int port;
     int fd;
+    int p2p_port;
 } ActiveUser;
 
 ActiveUser active_users[MAX_USERS];
 int active_user_count = 0;
 pthread_mutex_t active_users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void add_active_user(const char *username, const char *ip, int port, int fd) {
+void add_active_user(const char *username, const char *ip, int port, int fd, int p2p_port) {
     pthread_mutex_lock(&active_users_mutex);
     for (int i = 0; i < active_user_count; ++i) {
         if (strcmp(active_users[i].username, username) == 0) {
@@ -39,6 +40,7 @@ void add_active_user(const char *username, const char *ip, int port, int fd) {
         strncpy(active_users[active_user_count].ip, ip, INET_ADDRSTRLEN - 1);
         active_users[active_user_count].port = port;
         active_users[active_user_count].fd = fd;
+        active_users[active_user_count].p2p_port = p2p_port;
         active_users[active_user_count].username[USERNAME_LEN - 1] = '\0';
         active_users[active_user_count].ip[INET_ADDRSTRLEN - 1] = '\0';
         active_user_count++;
@@ -74,8 +76,9 @@ void client_loop(char username[], int client_fd) {
         if (n <= 0) break;
 
         buffer[strcspn(buffer, "\n")] = 0;
-
-        if (strcmp(buffer, "/who") == 0) {
+        if (strcmp(buffer, "/exit") == 0) {
+            kill_client(username, client_fd);
+        } else if (strcmp(buffer, "/who") == 0) {
             pthread_mutex_lock(&active_users_mutex);
             char users_msg[BUFFER_SIZE] = "Active users:\n";
             for (int i = 0; i < active_user_count; i++) {
@@ -83,72 +86,72 @@ void client_loop(char username[], int client_fd) {
                 snprintf(line, sizeof(line), " - %s (%s:%d)\n",
                          active_users[i].username,
                          active_users[i].ip,
-                         active_users[i].port);
+                         active_users[i].p2p_port);
                 strncat(users_msg, line, sizeof(users_msg) - strlen(users_msg) - 1);
             }
             pthread_mutex_unlock(&active_users_mutex);
             send(client_fd, users_msg, strlen(users_msg), 0);
-        } else if (strncmp(buffer, "/p2p", 4) == 0) {
-            char ip[INET_ADDRSTRLEN];
-            int port;
+        // } else if (strncmp(buffer, "/p2p", 4) == 0) {
+        //     char ip[INET_ADDRSTRLEN];
+        //     int port;
 
-            if (sscanf(buffer + 5, "%15s %d", ip, &port) != 2) {
-                send(client_fd, "Error: Invalid P2P format. Usage: /p2p <ip> <port>\n", 51, 0);
-                kill_client(username, client_fd);
-            }
+        //     if (sscanf(buffer + 5, "%15s %d", ip, &port) != 2) {
+        //         send(client_fd, "Error: Invalid P2P format. Usage: /p2p <ip> <port>\n", 51, 0);
+        //         kill_client(username, client_fd);
+        //     }
 
-            pthread_mutex_lock(&active_users_mutex);
-            int found_index = -1;
-            for (int i = 0; i < active_user_count; ++i) {
-                if (strcmp(active_users[i].ip, ip) == 0 && active_users[i].port == port) {
-                    found_index = i;
-                    break;
-                }
-            }
-            pthread_mutex_unlock(&active_users_mutex);
+        //     pthread_mutex_lock(&active_users_mutex);
+        //     int found_index = -1;
+        //     for (int i = 0; i < active_user_count; ++i) {
+        //         if (strcmp(active_users[i].ip, ip) == 0 && active_users[i].port == port) {
+        //             found_index = i;
+        //             break;
+        //         }
+        //     }
+        //     pthread_mutex_unlock(&active_users_mutex);
 
-            if (found_index == -1) {
-                send(client_fd, "Error: No active user found with that IP and port.\n", 51, 0);
-                kill_client(username, client_fd);
-            }
+        //     if (found_index == -1) {
+        //         send(client_fd, "Error: No active user found with that IP and port.\n", 51, 0);
+        //         kill_client(username, client_fd);
+        //     }
 
-            char request_msg[BUFFER_SIZE];
-            snprintf(request_msg, sizeof(request_msg), "P2P_REQUEST_FROM:%s\n", username);
-            send(active_users[found_index].fd, request_msg, strlen(request_msg), 0);
-            send(client_fd, "Target found. Awaiting their response...\n", 41, 0);
+        //     char request_msg[BUFFER_SIZE];
+        //     snprintf(request_msg, sizeof(request_msg), "P2P_REQUEST_FROM:%s\n", username);
+        //     send(active_users[found_index].fd, request_msg, strlen(request_msg), 0);
+        //     send(client_fd, "Target found. Awaiting their response...\n", 41, 0);
 
-            // Wait for target client's response
-            fd_set readfds;
-            FD_ZERO(&readfds);
-            FD_SET(active_users[found_index].fd, &readfds);
+        //     // Wait for target client's response
+        //     fd_set readfds;
+        //     FD_ZERO(&readfds);
+        //     FD_SET(active_users[found_index].fd, &readfds);
 
-            struct timeval timeout;
-            timeout.tv_sec = 30;  // wait up to 30 seconds
-            timeout.tv_usec = 0;
+        //     struct timeval timeout;
+        //     timeout.tv_sec = 30;  // wait up to 30 seconds
+        //     timeout.tv_usec = 0;
 
-            int activity = select(active_users[found_index].fd + 1, &readfds, NULL, NULL, &timeout);
-            if (activity > 0 && FD_ISSET(active_users[found_index].fd, &readfds)) {
-                char response[BUFFER_SIZE];
-                memset(response, 0, sizeof(response));
-                int bytes = recv(active_users[found_index].fd, response, sizeof(response), 0);
-                if (bytes > 0) {
-                    if (strncmp(response, "P2P_ACCEPT:", 11) == 0) {
-                        char confirm[BUFFER_SIZE];
-                        snprintf(confirm, sizeof(confirm), "P2P_ACCEPTED by %s\n", active_users[found_index].username);
-                        send(client_fd, confirm, strlen(confirm), 0);
-                    } else if (strncmp(response, "P2P_REJECT:", 11) == 0) {
-                        char reject[BUFFER_SIZE];
-                        snprintf(reject, sizeof(reject), "P2P_REJECTED by %s\n", active_users[found_index].username);
-                        send(client_fd, reject, strlen(reject), 0);
-                    } else {
-                        send(client_fd, "Unexpected response received from target.\n", 42, 0);
-                    }
-                } else {
-                    send(client_fd, "Error reading target's response.\n", 34, 0);
-                }
-            } else {
-                send(client_fd, "No response from target. Timeout or error.\n", 44, 0);
-            }
+        //     int activity = select(active_users[found_index].fd + 1, &readfds, NULL, NULL, &timeout);
+        //     if (activity > 0 && FD_ISSET(active_users[found_index].fd, &readfds)) {
+        //         char response[BUFFER_SIZE];
+        //         memset(response, 0, sizeof(response));
+        //         int bytes = recv(active_users[found_index].fd, response, sizeof(response), 0);
+        //         if (bytes > 0) {
+        //             if (strncmp(response, "P2P_ACCEPT:", 11) == 0) {
+        //                 char confirm[BUFFER_SIZE];
+        //                 snprintf(confirm, sizeof(confirm), "P2P_ACCEPTED by %s\n", active_users[found_index].username);
+        //                 send(client_fd, confirm, strlen(confirm), 0);
+        //             } else if (strncmp(response, "P2P_REJECT:", 11) == 0) {
+        //                 char reject[BUFFER_SIZE];
+        //                 snprintf(reject, sizeof(reject), "P2P_REJECTED by %s\n", active_users[found_index].username);
+        //                 send(client_fd, reject, strlen(reject), 0);
+        //             } else {
+        //                 send(client_fd, "Unexpected response received from target.\n", 42, 0);
+        //             }
+        //         } else {
+        //             send(client_fd, "Error reading target's response.\n", 34, 0);
+        //         }
+        //     } else {
+        //         send(client_fd, "No response from target. Timeout or error.\n", 44, 0);
+        //     }
 
         
         } else {
@@ -203,8 +206,13 @@ void *handle_client(void *arg) {
         if (log_or_sign == 1) {
             if (db_login(username, password)) {
                 authenticated = 1;
-                add_active_user(username, ip_str, port, client_fd);
                 send(client_fd, "Login successful\n", 17, 0);
+                memset(buffer, 0, BUFFER_SIZE);
+                if (recv(client_fd, buffer, BUFFER_SIZE, 0) <= 0) break;
+                buffer[strcspn(buffer, "\n")] = 0;
+                int p2p_port = atoi(buffer);
+                //printf("received p2p_port = %d\n", p2p_port);
+                add_active_user(username, ip_str, port, client_fd, p2p_port);
                 client_loop(username, client_fd);
             } else {
                 attempts++;

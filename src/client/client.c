@@ -26,6 +26,40 @@ int p2p_sock_fd = -1;  // P2P listening socket
 int p2p_conn_fd = -1;  // Active connection (if accepted)
 int p2p_flag = 0;
 
+// void *request_listener(void *arg) {
+//     int sock = *(int *)arg;
+//     char buffer[BUFFER_SIZE];
+
+//     while (1) {
+//         memset(buffer, 0, sizeof(buffer));
+//         int n = recv(sock, buffer, BUFFER_SIZE, 0);
+//         if (n <= 0) {
+//             printf("\n[SERVER] Connection lost.\n");
+//             exit(1);
+//         }
+
+//         // Handle a P2P request
+//         if (strncmp(buffer, "P2P_REQUESTION:", 15) == 0) {
+//             printf("\n[SERVER] %s", buffer + 15);
+//             printf("[P2P] Do you want to accept the connection? (yes=1 / no=0): ");
+
+//             char response[10];
+//             if (fgets(response, sizeof(response), stdin)) {
+//                 if (response[0] == '1') {
+//                     send(sock, "1\n", 2, 0);
+//                 } else {
+//                     send(sock, "0\n", 2, 0);
+//                 }
+//             }
+//         }
+
+//         fflush(stdout); // keep prompt clean
+//     }
+
+//     return NULL;
+// }
+
+
 void *receive_messages(void *arg) {
     int conn = *((int *)arg);
     char buffer[1024];
@@ -71,30 +105,30 @@ void p2p_loop(int conn) {
 }
 
 
-void *p2p_listener_thread(void *arg) {
-    P2PArgs *args = (P2PArgs *)arg;
-    int listener_fd = args->listener_fd;
-    int server_fd = args->server_fd;
+// void *p2p_listener_thread(void *arg) {
+//     P2PArgs *args = (P2PArgs *)arg;
+//     int listener_fd = args->listener_fd;
+//     int server_fd = args->server_fd;
 
-    free(args);
+//     free(args);
 
-    struct sockaddr_in client_addr;
-    socklen_t addrlen = sizeof(client_addr);
+//     struct sockaddr_in client_addr;
+//     socklen_t addrlen = sizeof(client_addr);
 
-    int conn_fd = accept(listener_fd, (struct sockaddr *)&client_addr, &addrlen);
-    if (conn_fd >= 0) {
-        printf("\n[P2P] Connection established!\n");
+//     int conn_fd = accept(listener_fd, (struct sockaddr *)&client_addr, &addrlen);
+//     if (conn_fd >= 0) {
+//         printf("\n[P2P] Connection established!\n");
 
-        // Close connection to server
-        close(server_fd);
-        printf("[P2P] Server connection closed.\n");
-        p2p_flag = 1;
+//         // Close connection to server
+//         close(server_fd);
+//         printf("[P2P] Server connection closed.\n");
+//         p2p_flag = 1;
 
-        p2p_loop(conn_fd);
-    }
+//         p2p_loop(conn_fd);
+//     }
 
-    return NULL;
-}
+//     return NULL;
+// }
 
 
 
@@ -203,36 +237,57 @@ void send_p2p_request(int server_sock) {
         return;
     }
 
-    // Create socket
-    int p2p_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (p2p_sock < 0) {
-        perror("Failed to create P2P socket");
-        return;
+    char message[BUFFER_SIZE];
+    snprintf(message, sizeof(message), "/p2p %s %s\n", ip, port);
+    send(server_sock, message, strlen(message), 0);
+
+    char response[BUFFER_SIZE];
+    memset(response, 0, BUFFER_SIZE);
+    recv(server_sock, response, BUFFER_SIZE, 0);
+
+    response[strcspn(response, "\n")] = 0;
+
+    if (strcmp(response, "FAIL") == 0) {
+        printf("\nError! Failed find the client or get a response. Closing connection...\n");
+        close(server_sock);
+    } else if (strcmp(response, "REJECT") == 0) {
+        printf("\nThe client rejected the request.\n");
+    } else if (strcmp(response, "ACCEPT") == 0) {
+        // Create socket
+        printf("accepted!!!!\n");
+        int p2p_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (p2p_sock < 0) {
+            perror("Failed to create P2P socket");
+            return;
+        }
+
+        struct sockaddr_in peer_addr;
+        memset(&peer_addr, 0, sizeof(peer_addr));
+        peer_addr.sin_family = AF_INET;
+        peer_addr.sin_port = htons(port_num);
+
+        if (inet_pton(AF_INET, ip, &peer_addr.sin_addr) <= 0) {
+            perror("Invalid IP address");
+            close(p2p_sock);
+            return;
+        }
+
+        printf("Connecting to peer %s:%d...\n", ip, port_num);
+        if (connect(p2p_sock, (struct sockaddr *)&peer_addr, sizeof(peer_addr)) < 0) {
+            perror("P2P connection failed");
+            close(p2p_sock);
+            return;
+        }
+
+        printf("✅ Connected to peer! Closing server connection...\n");
+        close(server_sock);  // Close server socket
+
+        // Chat loop with peer
+        p2p_loop(p2p_sock);
+    } else {
+        printf("\nUnknown response from server\n");
     }
 
-    struct sockaddr_in peer_addr;
-    memset(&peer_addr, 0, sizeof(peer_addr));
-    peer_addr.sin_family = AF_INET;
-    peer_addr.sin_port = htons(port_num);
-
-    if (inet_pton(AF_INET, ip, &peer_addr.sin_addr) <= 0) {
-        perror("Invalid IP address");
-        close(p2p_sock);
-        return;
-    }
-
-    printf("Connecting to peer %s:%d...\n", ip, port_num);
-    if (connect(p2p_sock, (struct sockaddr *)&peer_addr, sizeof(peer_addr)) < 0) {
-        perror("P2P connection failed");
-        close(p2p_sock);
-        return;
-    }
-
-    printf("✅ Connected to peer! Closing server connection...\n");
-    close(server_sock);  // Close server socket
-
-    // Chat loop with peer
-    p2p_loop(p2p_sock);
 
 }
 
@@ -286,6 +341,8 @@ int main() {
         }
     }
 
+
+
     // Setup P2P listener socket
     p2p_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in p2p_addr;
@@ -308,8 +365,11 @@ int main() {
     args->listener_fd = p2p_sock_fd;
     args->server_fd = sock; // your existing connection to the server
 
-    pthread_t tid;
-    pthread_create(&tid, NULL, p2p_listener_thread, args);
+    // pthread_t tid;
+    // pthread_create(&tid, NULL, p2p_listener_thread, args);
+
+    // pthread_t server_thread;
+    // pthread_create(&server_thread, NULL, request_listener, &sock);
 
 
     while (1) {
@@ -327,6 +387,23 @@ int main() {
         if (strcmp(buffer, "/exit") == 0) break;
         else if (strcmp(buffer, "/who") == 0) active_list(sock);
         else if (strcmp(buffer, "/p2p") == 0) send_p2p_request(sock);
+        else if (strcmp(buffer, "/wait") == 0) {
+            char response[BUFFER_SIZE];
+            memset(response, 0, BUFFER_SIZE);
+            printf("Waiting to receive...\n");
+            int n = recv(sock, response, BUFFER_SIZE, 0);
+            if (n > 0) {
+                printf("server says: %s\n", response);
+            } else {
+                perror("recv failed");
+            }
+        } else if (strcmp(buffer, "/send1") == 0) {
+            send(sock, "1\n", 2, 0);
+            printf("Sent '1' to server.\n");
+        } else if (strcmp(buffer, "/send0") == 0) {
+            send(sock, "0\n", 2, 0);
+            printf("Sent '0' to server.\n");
+        }
         else if (p2p_flag) pthread_exit(NULL);
         else printf("Error: Invalid command\n");
     }

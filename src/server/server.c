@@ -154,6 +154,52 @@ void client_loop(char username[], int client_fd) {
         //     }
 
         
+        } else if (strncmp(buffer, "/p2p", 4) == 0) {
+            char ip[INET_ADDRSTRLEN];
+            int port;
+
+            if (sscanf(buffer + 5, "%15s %d", ip, &port) != 2) {
+                send(client_fd, "FAIL\n", 7, 0);
+            } else {
+                printf("\nip = %s, port = %d\n", ip, port);
+                pthread_mutex_lock(&active_users_mutex);
+                int found_index = -1;
+                printf("inside the mutex teehe\n");
+                for (int i = 0; i < active_user_count; i++) {
+                    printf("Checking user[%d]: ip=%s, port=%d\n", i, active_users[i].ip, active_users[i].p2p_port);
+                    if (strcmp(active_users[i].ip, ip) == 0 && active_users[i].p2p_port == port) {
+                        found_index = i;
+                        printf("i have found the index lol = %d\n", found_index);
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&active_users_mutex);
+                printf("\nfound index = %d\n", found_index);
+                if (found_index == -1) {
+                    send(client_fd, "FAIL\n", 7, 0);
+                } else {
+                    // Successfully found a target
+                    char msg[BUFFER_SIZE];
+                    snprintf(msg, sizeof(msg), "P2P_REQUEST: User %s would like to connect: 1 to accept, 0 to reject\n", username);
+                    send(active_users[found_index].fd, msg, strlen(msg), 0);
+                    printf("Sent P2P request to %s (fd=%d)\n", active_users[found_index].username, active_users[found_index].fd);
+                    char response[BUFFER_SIZE];
+                    memset(response, 0, sizeof(response));
+
+                    int n = recv(active_users[found_index].fd, response, sizeof(response), 0);
+                    if (n <= 0) {
+                        send(client_fd, "FAIL\n", 7, 0);
+                    } else {
+                        if (response[0] == '1') {
+                            printf("received an accept from client \n");
+                            send(client_fd, "ACCEPT\n", 7, 0);
+                            printf("sent accept to client\n");
+                        } else {
+                            send(client_fd, "REJECT\n", 7, 0);
+                        }
+                    }
+                } 
+            }
         } else {
             char *err = "server unknown command\n";
             send(client_fd, err, strlen(err), 0);

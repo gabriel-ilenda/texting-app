@@ -180,19 +180,22 @@ void client_loop(char username[], int client_fd) {
                 } else {
                     // Successfully found a target
                     char msg[BUFFER_SIZE];
-                    snprintf(msg, sizeof(msg), "P2P_REQUEST: User %s would like to connect: 1 to accept, 0 to reject\n", username);
+                    snprintf(msg, sizeof(msg), "P2P_REQUEST: Connection query from user: %s\n", username);
                     send(active_users[found_index].fd, msg, strlen(msg), 0);
                     printf("Sent P2P request to %s (fd=%d)\n", active_users[found_index].username, active_users[found_index].fd);
                     char response[BUFFER_SIZE];
                     memset(response, 0, sizeof(response));
 
                     int n = recv(active_users[found_index].fd, response, sizeof(response), 0);
+                    printf("n = %d\n", n);
                     if (n <= 0) {
                         send(client_fd, "FAIL\n", 7, 0);
                     } else {
                         if (response[0] == '1') {
                             printf("received an accept from client \n");
-                            send(client_fd, "ACCEPT\n", 7, 0);
+                            char msg[BUFFER_SIZE];
+                            snprintf(msg, sizeof(msg), "ACCEPT:%s\n", active_users[found_index].username);
+                            send(client_fd, msg, strlen(msg), 0);
                             printf("sent accept to client\n");
                         } else {
                             send(client_fd, "REJECT\n", 7, 0);

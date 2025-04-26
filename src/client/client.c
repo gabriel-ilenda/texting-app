@@ -386,17 +386,48 @@ int main() {
     sprintf(buffer, "%d\n", p2p_port);
     send(sock, buffer, strlen(buffer), 0);
 
+    // ----- Setup UDP listener --------
+    int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in udp_addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = INADDR_ANY,
+        .sin_port = 0  // let OS pick port
+    };
+    bind(udp_sock, (struct sockaddr *)&udp_addr, sizeof(udp_addr));
+    listen(udp_sock, 5);
+
+    socklen_t alen2 = sizeof(udp_addr);
+    getsockname(udp_sock, (struct sockaddr *)&udp_addr, &alen2);
+    int udp_port = ntohs(udp_addr.sin_port);
+    sprintf(buffer, "%d\n", udp_port);
+    send(sock, buffer, strlen(buffer), 0);
+
+    
+    printf("Command List:\n"
+        "  /who       List active users\n"
+        "  /p2p       Peer-to-peer chat\n"
+        "  /broadcast Broadcast to everyone\n"
+        "  /exit      Quit\n\n");
+
+    
+
     // ----- Unified select() loop -----
     fd_set read_fds;
     int maxfd = sock;
     if (p2p_sock > maxfd) maxfd = p2p_sock;
+    if (udp_sock  > maxfd) maxfd = udp_sock;
     if (STDIN_FILENO > maxfd) maxfd = STDIN_FILENO;
 
     while (1) {
+
+        printf("You: ");
+        fflush(stdout);
+
         FD_ZERO(&read_fds);
         FD_SET(STDIN_FILENO, &read_fds);
         FD_SET(sock,         &read_fds);
         FD_SET(p2p_sock,     &read_fds);
+        FD_SET(udp_sock,     &read_fds);
 
         if (select(maxfd+1, &read_fds, NULL, NULL, NULL) < 0) {
             perror("select");
@@ -453,6 +484,26 @@ int main() {
             }
         }
 
+        if (FD_ISSET(udp_sock, &read_fds)) {
+            char msg[BUFFER_SIZE];
+            struct sockaddr_in src;
+            socklen_t src_len = sizeof(src);
+    
+            ssize_t n = recvfrom(
+                udp_sock,
+                msg, sizeof(msg)-1,
+                0,
+                (struct sockaddr*)&src, &src_len
+            );
+            if (n > 0) {
+                msg[n] = '\0';
+                // print as soon as it arrives
+                printf("\n[BROADCAST] %s\n",msg);
+                // reprint your prompt if waiting for user
+                fflush(stdout);
+            }
+        }
+
         // — User typed a command —
         if (FD_ISSET(STDIN_FILENO, &read_fds)) {
             if (!fgets(buffer, sizeof(buffer), stdin)) break;
@@ -467,6 +518,14 @@ int main() {
                     p2p_chat(peer_fd);
                     return 0;
                 }
+            } else if (strcmp(buffer, "/broadcast")==0) {
+                char msg[BUFFER_SIZE];
+                printf("Message to All: ");
+                if (!fgets(msg, BUFFER_SIZE, stdin)) return 0;
+                msg[strcspn(msg, "\n")] = 0;
+                char broadcast[BUFFER_SIZE];
+                snprintf(broadcast, sizeof(broadcast), "/broadcast %s\n", msg);
+                send(sock, broadcast, strlen(broadcast), 0);
             }
             else {
                 printf("Error: Unknown command.\n");

@@ -1,0 +1,89 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: chat_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: chatdb
+      MYSQL_USER: chatuser
+      MYSQL_PASSWORD: chatpass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD","mysqladmin","ping","-h","localhost","-uroot","-prootpass"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    networks:
+      - chatnet
+
+  server:
+    build:
+      context: ./src/server
+      dockerfile: Dockerfile
+    container_name: chat_server
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: chatdb
+      DB_USER: chatuser
+      DB_PASS: chatpass
+    ports:
+      - "4400:4400"
+    networks:
+      - chatnet
+
+  client1:
+    build:
+      context: ./src/client
+      dockerfile: Dockerfile
+    container_name: chat_client1
+    stdin_open: true
+    tty: true
+    depends_on:
+      - server
+    environment:
+      - SERVER_HOST=server
+    networks:
+      - chatnet
+
+  client2:
+    build:
+      context: ./src/client
+      dockerfile: Dockerfile
+    container_name: chat_client2
+    stdin_open: true
+    tty: true
+    depends_on:
+      - server
+    environment:
+      - SERVER_HOST=server
+    networks:
+      - chatnet
+
+  client3:
+    build:
+      context: ./src/client
+      dockerfile: Dockerfile
+    container_name: chat_client3
+    stdin_open: true
+    tty: true
+    depends_on:
+      - server
+    environment:
+      - SERVER_HOST=server
+    networks:
+      - chatnet
+
+volumes:
+  db_data:
+
+networks:
+  chatnet:
+    driver: bridge

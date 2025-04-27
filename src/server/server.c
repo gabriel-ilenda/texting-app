@@ -293,6 +293,7 @@ int main() {
     db_connect();
 
     printf("Server listening on port %d...\n", PORT);
+    fflush(stdout);
 
     while (1) {
         client_fd = malloc(sizeof(int));

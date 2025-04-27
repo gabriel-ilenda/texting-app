@@ -7,8 +7,13 @@
 MYSQL *conn;
 
 void db_connect() {
+    const char *host = getenv("DB_HOST");
+    unsigned int port = atoi(getenv("DB_PORT"));
+    const char *user = getenv("DB_USER");
+    const char *pass = getenv("DB_PASS");
+    const char *name = getenv("DB_NAME");
     conn = mysql_init(NULL);
-    if (!mysql_real_connect(conn, "localhost", "root", "S@ntosRed20", "letschat", 0, NULL, 0)) {
+    if (!mysql_real_connect(conn, host, user, pass, name, port, 0, NULL)) {
         fprintf(stderr, "MySQL connection failed: %s\n", mysql_error(conn));
         exit(EXIT_FAILURE);
     }

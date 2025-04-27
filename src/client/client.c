@@ -8,8 +8,16 @@
 #include <sys/select.h>
 #include <bits/pthreadtypes.h>
 #include <pthread.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
-#define SERVER_IP "127.0.0.1"
+
+
+#ifndef SERVER_HOST
+#define SERVER_HOST "127.0.0.1"
+#endif
+
 #define SERVER_PORT 4400
 #define BUFFER_SIZE 1024
 #define USERNAME_LEN 100
@@ -337,20 +345,41 @@ int send_p2p_request(int server_sock) {
 
 
 int main() {
+    setvbuf(stdout, NULL, _IONBF, 0);
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) { perror("socket"); return 1; }
 
-    struct sockaddr_in serv_addr = {
-        .sin_family = AF_INET,
-        .sin_port   = htons(SERVER_PORT)
-    };
-    inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr);
+    const char *host = getenv("SERVER_HOST") ? getenv("SERVER_HOST") : SERVER_HOST;
+    char portstr[6];
+    snprintf(portstr, sizeof portstr, "%d", SERVER_PORT);
 
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("connect");
+    struct addrinfo hints = {0}, *res, *p;
+    hints.ai_family   = AF_UNSPEC;      // either IPv4 or IPv6
+    hints.ai_socktype = SOCK_STREAM;
+
+    int rv = getaddrinfo(host, portstr, &hints, &res);
+    if (rv) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
-    printf("Connected to server.\n");
+
+    int connected = 0;
+    for (p = res; p; p = p->ai_next) {
+        if ((sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0) {
+            continue;  // try next
+        }
+        if (connect(sock, p->ai_addr, p->ai_addrlen) == 0) {
+            connected = 1;
+            break;
+        }
+        close(sock);
+    }
+    freeaddrinfo(res);
+
+    if (!connected) {
+        fprintf(stderr, "Failed to connect to %s:%s\n", host, portstr);
+        return 1;
+    }
 
     // ----- Auth (login/signup) -----
     // (Assume you have login(sock) and signup(sock) implemented)

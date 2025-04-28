@@ -4,22 +4,25 @@ RUN PROJECT:
 2. $ docker-compose down -v
     - This kills any stray docker processes and resets the database (if for some reason
       you have used my database before).
-    - Note that this means the database is reset each time the docker is built, so the users
+    - Note that this command resets the database, so the users
       you signup with will not persist across mutliple docker builds (but will persist across
       running a client multiple times for 1 build).
-3. $ docker ps
+3. $ docker-compose up --build -d
+    - Wait for containers: chat_myserver, chat_client1, chat_client2, chat_client3 to be "Started"
+    - Wait for container: chat_mysql to be "Healthy"
+4. $ docker ps
     - Ensure that all 5 containers are running (chat_client1, chat_client2, chat_client3, chat_server, chat_mysql)
     - If not all 5 are running (sometimes the clients get stuck because of a lengthy database connection process),
-      repeat from step 2.
-4. Open 3 new terminals (do not split terminals, open 3 fresh ones). Current terminal = Terminal 0 = where we manage
+      repeat step 3.
+5. Open 3 new terminals (do not split terminals, open 3 fresh ones). Current terminal = Terminal 0 = where we manage
    and kill the processes.
-5. Terminal 1: $ docker-compose exec client1 ./client
-6. Terminal 2: $ docker-compose exec client2 ./client
-7. Terminal 2: $ docker-compose exec client3 ./client
-8. From here, you can interact with the app as described in the shell. Note that if your client connection is terminated
+6. Terminal 1: $ docker-compose exec client1 ./client
+7. Terminal 2: $ docker-compose exec client2 ./client
+8. Terminal 2: $ docker-compose exec client3 ./client
+9. From here, you can interact with the app as described in the shell. Note that if your client connection is terminated
    and the shell is killed (ex: you start a p2p connection, you type '/exit', you fail a login 3 times, you fail a p2p request), 
    you can rerun steps 6, 7, or 8 (depending on the terminal you're in) to reopen the connection.
-9. When you're done with he app, you can ctrl+c to kill the clients if they're still running. In terminal 0, use
+10. When you're done with he app, you can ctrl+c or /exit to kill the clients if they're still running. In terminal 0, use
    ($ docker-compose down -v) to terminate all containers and cleanup. 
 
 USE PROJECT
